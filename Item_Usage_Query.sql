@@ -1,4 +1,3 @@
--- Query in progress 9/18/24
 -- TracRite>Optimum Control Inventory Measurement Tool
 -- Output:
     -- Item Description, Internal Item ID, Recent Supplier, 
