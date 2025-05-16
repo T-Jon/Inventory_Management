@@ -3,9 +3,9 @@
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 SET NOCOUNT ON;
 
-DECLARE @Store INT = 2;
-DECLARE @StartDate DATETIME = '2025-03-01';
-DECLARE @EndDate DATETIME = '2025-03-31';
+DECLARE @Store INT = 7;
+DECLARE @StartDate DATETIME = '2025-05-01';
+DECLARE @EndDate DATETIME = '2025-05-31';
 DECLARE @SearchItem NVARCHAR(50) = '%%';
 DECLARE @SearchOrderCode NVARCHAR(50) = '%%';
 DECLARE @ActiveItems TABLE (ItemId INT PRIMARY KEY);
@@ -52,6 +52,8 @@ SELECT DISTINCT ItemId FROM (
       AND us.UsageDate BETWEEN @StartDate AND @EndDate
 ) AS Combined
 
+
+
 -- Temp table to gather item activity
 DECLARE @Activity TABLE (
     ItemId INT,
@@ -89,7 +91,8 @@ SELECT DISTINCT
     pu.Uom AS PurchaseUom,
     cu.Uom AS CaseUom,
     pku.Uom AS PakUom,
-    ru.Uom AS ReportingUom
+    ru.Uom AS ReportingUom,
+    cat.Name AS CategoryName
 INTO #ItemInfo
 FROM oc.Item i
 JOIN oc.ItemDetail id ON id.Item = i.ItemId
@@ -106,6 +109,8 @@ JOIN oc.Uom pu ON pu.UomId = cs.PurchaseUom
 JOIN oc.Uom cu ON cu.UomId = cs.CaseUom
 JOIN oc.Uom pku ON pku.UomId = cs.PakUom
 JOIN oc.Uom ru ON ru.UomId = icf.ReportingUom
+JOIN oc.[Group] g ON g.GroupId = i.ItemGroup
+JOIN oc.Category cat ON cat.CategoryId = g.Category 
 WHERE 
     LOWER(cs.OrderCode) LIKE LOWER(@SearchOrderCode) OR @SearchOrderCode = '%%'
 ;
@@ -137,8 +142,8 @@ SELECT
     i.Descrip,
     inv.OpenDate,
     'Opening Inventory',
-    (invs.QtyOnHand + invs.PreppedQty) / NULLIF(info.ReportingConversionFactor, 0),  
-    (invs.QtyOnHand + invs.PreppedQty) / NULLIF(info.ReportingConversionFactor, 0),  
+    (invs.QtyOnHand + invs.PreppedQty) / NULLIF(info.ReportingConversionFactor, 0),  -- Amount
+    (invs.QtyOnHand + invs.PreppedQty) / NULLIF(info.ReportingConversionFactor, 0),  -- QtyOnHand
     invs.TotalValue,
     '',
     report.RetrieveStoreName(@Store),
@@ -221,6 +226,8 @@ WHERE inv.Store = @Store
   AND LOWER(i.Descrip) LIKE LOWER(@SearchItem)
   AND (cs.OrderCode LIKE @SearchOrderCode OR @SearchOrderCode = '%%')
   AND i.ItemId IN (SELECT ItemId FROM @ActiveItems);
+
+
 
 -- Waste
 INSERT INTO @Activity (
@@ -359,6 +366,7 @@ GROUP BY
     info.PakUom, 
     info.ReportingUom;
 
+
 -- Transfer Out
 INSERT INTO @Activity (
     ItemId, 
@@ -430,6 +438,7 @@ GROUP BY
     info.PakUom, 
     info.ReportingUom;;
 
+
 -- Ending Inventory
 INSERT INTO @Activity (
     ItemId, 
@@ -482,29 +491,54 @@ WHERE inv.Store = @Store
   AND LOWER(i.Descrip) LIKE LOWER(@SearchItem)
   AND i.ItemId IN (SELECT ItemId FROM @ActiveItems);
 
+-- Optional: Aggregate value per item (Subtotal)
+-- You can uncomment if you want a summarized row per item
+/*
+INSERT INTO @Activity
+SELECT
+    ItemId,
+    MAX(ItemDescrip),
+    NULL,
+    'Subtotal',
+    SUM(Amount),
+    NULL,
+    SUM(Value),
+    '',
+    MAX(StoreName),
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+FROM @Activity
+GROUP BY ItemId
+*/
+
+-- Optional: Calculate Unit Cost via ReportingUOM
+-- If needed, you can use this format:
+-- UnitCost = CASE WHEN Qty <> 0 THEN Value / Qty ELSE NULL END
+
 -- Final Output
 SELECT 
-    ItemDescrip As "Item",
-    -- ItemId,
+    a.ItemDescrip As "Item",
+    info.CategoryName AS "Category", 
+    -- a.ItemId,
     CONVERT(DATE, ActivityDate) AS "Date",
-    ActivityTypeName AS "Activity Type",    
-    SupplierName AS "Vendor/Store",
-    Amount AS "Quantity",
-    ReportingUom AS "Unit of Measure",    
-    --CaseQty,
-    --PakQty,
-    --PurchaseUom,
-    --CaseUom,
-    --PakUom,
-    -- QtyOnHand,
-    Value,    
-    CaseCost,
-    UnitCost AS "UoM Cost",
-    PurchaseInfo AS "Ref/Inv #",
-    OrderCode AS "Vendor Code",
-    StoreName
+    a.ActivityTypeName AS "Activity Type",    
+    a.SupplierName AS "Vendor/Store",
+    a.Amount AS "Qty", --As Reporting UoM
+    a.ReportingUom AS "Reporting_UoM",    
+    --a.CaseQty,
+    --a.PakQty,
+    --a.PurchaseUom,
+    --a.CaseUom,
+    --a.PakUom,
+    --a.QtyOnHand,
+    a.Value AS "Activity Value $",    
+    a.CaseCost,
+    a.UnitCost AS "UoM Cost",
+    a.PurchaseInfo AS "Ref/Inv #",
+    a.OrderCode AS "Vendor Code",
+    a.StoreName
 
-FROM @Activity
+FROM @Activity a
+JOIN #ItemInfo info ON info.ItemId = a.ItemId
 ORDER BY 
   ItemDescrip, 
   CONVERT(DATE, ActivityDate),
